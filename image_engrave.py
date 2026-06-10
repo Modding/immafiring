@@ -48,6 +48,9 @@ except ImportError as exc:  # pragma: no cover
         "Pillow wird für die Bildgravur benötigt. Installieren mit:  pip install Pillow"
     ) from exc
 
+# Pillow >= 9.1 nutzt Image.Resampling; Fallback für ältere Versionen.
+_LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
+
 
 # --------------------------------------------------------------------------- #
 # Parameter
@@ -127,7 +130,7 @@ def process_image(path_or_image, params: EngraveParams):
     px_per_mm_x = params.px_per_mm if params.px_per_mm else params.lines_per_mm
     px_w = max(1, round(width_mm * px_per_mm_x))
     px_h = max(1, round(height_mm * params.lines_per_mm))
-    img = img.resize((px_w, px_h), Image.LANCZOS)
+    img = img.resize((px_w, px_h), _LANCZOS)
 
     # Helligkeit / Kontrast / Gamma / Invertierung.
     if params.brightness != 1.0:
@@ -213,8 +216,11 @@ def raster_to_gcode(img, params: EngraveParams, width_mm, height_mm, progress=No
         cols = range(first, last + 1) if left_to_right else range(last, first - 1, -1)
         cols = list(cols)
 
-        # An den Zeilenanfang fahren (Laser aus).
-        start_x = ox + cols[0] * mm_per_px_x
+        # An den Zeilenanfang fahren (Laser aus). Startkante richtungsabhängig:
+        # links->rechts an der linken Kante des ersten Pixels, rechts->links an
+        # der rechten Kante -- sonst ist jede Rückzeile um 1 Pixel versetzt.
+        start_edge = cols[0] + (0 if left_to_right else 1)
+        start_x = ox + start_edge * mm_per_px_x
         out.append("M5 S0")
         out.append("G0 X%.3f Y%.3f F%g" % (start_x, y, params.travel_feed))
         out.append("%s S0" % params.laser_mode)   # Lasermodus aktivieren, Leistung 0
@@ -297,7 +303,7 @@ def _marching_squares(mask, px_w, px_h):
     return segs
 
 
-def _chain_segments(segs, tol=1e-6):
+def _chain_segments(segs):
     """Fügt Liniensegmente zu möglichst langen Polylinien zusammen."""
     from collections import defaultdict
 
@@ -435,15 +441,6 @@ def make_preview(img, params: EngraveParams, mode="raster", max_px=480):
     if scale < 1.0:
         base = base.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.NEAREST)
     return base
-
-
-def estimate_runtime_min(gcode_lines, params: EngraveParams):
-    """Sehr grobe Laufzeitschätzung in Minuten (nur Bewegungszeit, ohne Beschl.)."""
-    # Reine Heuristik: zähle G1/G0 und nimm Durchschnittsvorschub.
-    g1 = sum(1 for l in gcode_lines if l.startswith("G1"))
-    g0 = sum(1 for l in gcode_lines if l.startswith("G0"))
-    # Annahme grob: G1 dominiert; ohne echte Längen nur Daumenwert.
-    return None  # bewusst: lieber keine falsche Zahl als eine irreführende.
 
 
 # --------------------------------------------------------------------------- #

@@ -39,6 +39,7 @@ Teste neue Befehle erst mit niedriger Leistung / ohne Werkstück.
 """
 
 import argparse
+import os
 import re
 import sys
 import time
@@ -50,6 +51,27 @@ import urllib.error
 DEFAULT_IP = "192.168.0.1"   # Standard-IP des Engravers im Access-Point-Modus
 DEFAULT_PORT = 80
 DEFAULT_TIMEOUT = 6.0
+
+_UMLAUTS = {"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue", "ß": "ss"}
+
+
+def safe_remote_name(name, max_len=28):
+    """
+    Macht einen Dateinamen ESP3D/SPIFFS-tauglich.
+
+    SPIFFS auf dem ESP32 erlaubt nur ~31 Zeichen Pfadlänge; Umlaute, Leer-
+    und Sonderzeichen können Upload oder [ESP220]-Start scheitern lassen.
+    Transliteriert Umlaute, ersetzt alles außer A-Za-z0-9_- durch '_' und
+    kürzt auf max_len (inkl. Endung).
+    """
+    base, ext = os.path.splitext(os.path.basename(name))
+    for k, v in _UMLAUTS.items():
+        base = base.replace(k, v)
+    base = base.encode("ascii", "ignore").decode()
+    base = re.sub(r"[^A-Za-z0-9_-]+", "_", base).strip("_") or "job"
+    ext = re.sub(r"[^A-Za-z0-9.]+", "", ext) or ".gcode"
+    keep = max(1, max_len - len(ext))
+    return base[:keep] + ext
 
 
 class LaserError(Exception):
@@ -169,7 +191,13 @@ class LaserClient:
         return self.command("$X")
 
     def reset(self):
-        """Soft-Reset (Ctrl-X / 0x18) -- bricht den aktuellen Job ab."""
+        """
+        Soft-Reset (Ctrl-X / 0x18) -- bricht den aktuellen Job ab.
+
+        Hinweis: Das Steuerzeichen geht URL-kodiert (%18) an ESP3D. Ob die
+        Firmware es an GRBL durchreicht, am eigenen Gerät OHNE Werkstück
+        verifizieren (gilt auch für '!' und '~').
+        """
         return self.command("\x18")
 
     def hold(self):
@@ -267,10 +295,13 @@ class LaserClient:
         """
         Lädt eine (G-Code-)Datei auf den Engraver hoch.
         Entspricht: POST /upload?path=/&PAGEID=0  (multipart/form-data, Feldname 'file')
+
+        Der Zielname wird mit safe_remote_name() SPIFFS-tauglich gemacht;
+        zum Starten denselben (sanitierten) Namen an run_file() geben.
         """
-        import os
         if remote_name is None:
             remote_name = os.path.basename(filepath)
+        remote_name = safe_remote_name(remote_name)
         with open(filepath, "rb") as fh:
             data = fh.read()
         body, content_type = self._build_multipart("file", remote_name, data)
@@ -319,11 +350,17 @@ class LaserClient:
     # ------------------------------------------------------------------ #
     # G-Code zeilenweise streamen (Alternative zum Upload+Run)
     # ------------------------------------------------------------------ #
-    def stream_gcode(self, lines, progress=None):
+    def stream_gcode(self, lines, progress=None, delay=0.05):
         """
         Sendet G-Code Zeile für Zeile über das command-Interface.
         Nützlich für kleine Jobs oder zum Testen. 'lines' ist iterierbar.
         progress(i, total, line) wird optional pro Zeile aufgerufen.
+
+        ACHTUNG: ESP3D bestätigt den HTTP-Aufruf oft, BEVOR GRBL die Zeile
+        abgearbeitet hat -- es gibt keine echte Flusskontrolle. Bei langen
+        Jobs kann der GRBL-Puffer überlaufen und Zeilen verlieren. Für echte
+        Jobs upload() + run_file() verwenden. 'delay' (Sekunden) bremst das
+        Senden zusätzlich ab.
         """
         lines = [l.strip() for l in lines if l.strip() and not l.strip().startswith(";")]
         total = len(lines)
@@ -331,6 +368,8 @@ class LaserClient:
             self.command(line)
             if progress:
                 progress(i, total, line)
+            if delay:
+                time.sleep(delay)
 
 
 # ====================================================================== #

@@ -44,7 +44,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from immafiring import LaserClient, LaserError, DEFAULT_IP
+from immafiring import LaserClient, LaserError, DEFAULT_IP, safe_remote_name
 
 # Pillow / Engine sind optional: ohne sie läuft die Maschinensteuerung trotzdem.
 try:
@@ -479,7 +479,9 @@ class LaserGUI:
             return
 
         def after(lines, wmm, hmm):
-            name = os.path.splitext(os.path.basename(self.src_path or "motiv"))[0] + ".gcode"
+            # SPIFFS-tauglicher Name (ASCII, max ~28 Zeichen) für Upload UND Start.
+            name = safe_remote_name(
+                os.path.splitext(os.path.basename(self.src_path or "motiv"))[0] + ".gcode")
             tmp = os.path.join(tempfile.gettempdir(), name)
             with open(tmp, "w", encoding="ascii", errors="replace") as fh:
                 fh.write("\n".join(lines) + "\n")
@@ -496,6 +498,11 @@ class LaserGUI:
                     self.msgq.put(("genstatus", "Job gestartet: %s" % name))
                 except Exception as exc:  # noqa
                     self.msgq.put(("log", "✗ senden: %s" % exc))
+                finally:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
 
             threading.Thread(target=upload_worker, daemon=True).start()
 
@@ -589,10 +596,15 @@ class LaserGUI:
                     self.gen_status.config(text="G-Code fertig (%d Zeilen)." % len(lines))
                     after(lines, wmm, hmm)
                 elif kind == "conn":
-                    ok, ip = payload
+                    ok, ip, client = payload
                     if ok:
+                        self.laser = client
                         self.conn_lbl.config(text="● verbunden (%s)" % ip, foreground="#0a0")
+                        self.connect_btn.config(text="Trennen")
                         self.log("Verbunden mit %s" % ip)
+                        if not self.poll_active:
+                            self.poll_active = True
+                            self._poll_loop()
                     else:
                         self.conn_lbl.config(text="● keine Antwort", foreground="#b00")
                         self.log("Keine Antwort von %s" % ip)
@@ -604,15 +616,24 @@ class LaserGUI:
     # Verbindung / Status
     # ------------------------------------------------------------------ #
     def on_connect(self):
+        # Button wirkt als Umschalter: verbunden -> trennen.
+        if self.laser is not None:
+            self.poll_active = False
+            self.laser = None
+            self.conn_lbl.config(text="● getrennt", foreground="#b00")
+            self.connect_btn.config(text="Verbinden")
+            self.state_var.set("Zustand: —")
+            self.pos_var.set("X: —   Y: —   Z: —")
+            self.log("Getrennt.")
+            return
+
         ip = self.ip_var.get().strip()
-        self.laser = LaserClient(ip)
 
         def worker():
-            ok = self.laser.test_connection()
-            self.msgq.put(("conn", (ok, ip)))
-            if ok and not self.poll_active:
-                self.poll_active = True
-                self._poll_loop()
+            # Erst testen, erst bei Erfolg wird self.laser gesetzt (im Drain).
+            client = LaserClient(ip)
+            ok = client.test_connection()
+            self.msgq.put(("conn", (ok, ip, client)))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -665,12 +686,14 @@ class LaserGUI:
         if self.laser is None:
             messagebox.showwarning("Nicht verbunden", "Bitte zuerst verbinden.")
             return
-        name = os.path.basename(path)
+        name = safe_remote_name(path)
+        if name != os.path.basename(path):
+            self.log("Hinweis: Zielname auf Gerät = '%s' (SPIFFS-tauglich gekürzt)" % name)
 
         def worker():
             try:
                 self.msgq.put(("log", "Lade '%s' hoch…" % name))
-                res = self.laser.upload(path)
+                res = self.laser.upload(path, remote_name=name)
                 self.msgq.put(("log", "» upload: %s" % str(res).strip()))
                 if then_run:
                     res2 = self.laser.run_file(name)
