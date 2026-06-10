@@ -1,0 +1,51 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Virtuelle Umgebungen ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Test / Coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*~
+
+# --- Betriebssystem ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- ImmaFiring: erzeugte Gravur-Ausgaben ---
+# Aus Bildern generierter G-Code soll nicht ins Repo.
+*.gcode
+*.nc
+*.gc
+
+# Temporaere Test-/Hilfsdateien
+_*.py
+test_in.*
+cli_*.png
+cli_*.gcode
+
+# --- Claude Code: lokale Einstellungen behalten, nicht teilen ---
+.claude/settings.local.json
+CLAUDE.md
