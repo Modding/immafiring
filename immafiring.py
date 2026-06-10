@@ -230,6 +230,36 @@ class LaserClient:
         """Aktuelle Position als Arbeits-Nullpunkt setzen (G92 X0 Y0 Z0)."""
         return self.command("G92 X0 Y0 Z0")
 
+    def frame_bounds(self, width, height, x0=0.0, y0=0.0, feed=3000,
+                     power=0, repeat=1, laser_mode="M3"):
+        """
+        Fährt den Bounding-Box-Rahmen der Gravurfläche ab (Positionierhilfe).
+
+        Rechteck (x0, y0) .. (x0+width, y0+height) in Werkstück-Koordinaten;
+        Standard-Ursprung ist die aktuelle Position (wie bei der Gravur).
+
+        power=0  -> Laser bleibt AUS, nur Bewegung (Kopf zeigt die Lage).
+        power>0  -> Laser konstant (M3) auf diesem S-Wert. NIEDRIG halten:
+                    es soll ein sichtbarer, NICHT brennender Punkt sein.
+
+        Gibt die gesammelten Antworten als Text zurück.
+        """
+        if width <= 0 or height <= 0:
+            raise LaserError("Rahmenmaße müssen > 0 sein (w=%s, h=%s)" % (width, height))
+        x1 = x0 + width
+        y1 = y0 + height
+        cmds = ["G90", "G21"]
+        cmds.append("G0 X%g Y%g F%g" % (x0, y0, feed))    # an Startecke (Laser aus)
+        if power > 0:
+            cmds.append("%s S%d" % (laser_mode, int(power)))
+        corners = [(x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+        for _ in range(max(1, int(repeat))):
+            for cx, cy in corners:
+                cmds.append("G1 X%g Y%g F%g" % (cx, cy, feed))
+        cmds.append("M5 S0")                              # Laser sicher aus
+        out = [self.command(c).strip() for c in cmds]
+        return "\n".join(o for o in out if o)
+
     # ------------------------------------------------------------------ #
     # Datei-Upload und -Ausführung
     # ------------------------------------------------------------------ #
@@ -363,6 +393,16 @@ def _build_cli():
     ps = sub.add_parser("stream", help="G-Code-Datei zeilenweise streamen")
     ps.add_argument("file")
 
+    pf = sub.add_parser("frame", help="Bounding-Box abfahren (Positionierhilfe)")
+    pf.add_argument("--width", type=float, required=True, help="Breite (mm)")
+    pf.add_argument("--height", type=float, required=True, help="Höhe (mm)")
+    pf.add_argument("--x0", type=float, default=0.0, help="Start-X (Standard 0)")
+    pf.add_argument("--y0", type=float, default=0.0, help="Start-Y (Standard 0)")
+    pf.add_argument("--feed", type=float, default=3000)
+    pf.add_argument("--power", type=int, default=0,
+                    help="S-Wert; 0=Laser aus. >0 NIEDRIG halten (sichtbar, nicht brennen)")
+    pf.add_argument("--repeat", type=int, default=1, help="Anzahl Umläufe")
+
     pmon = sub.add_parser("monitor", help="Status fortlaufend anzeigen")
     pmon.add_argument("--interval", type=float, default=0.5)
     return p
@@ -423,6 +463,9 @@ def main(argv=None):
                 progress=lambda i, t, l: print("\r%d/%d  %s        " % (i, t, l[:40]),
                                                 end="", flush=True))
             print("\nFertig.")
+        elif a == "frame":
+            print(laser.frame_bounds(args.width, args.height, x0=args.x0, y0=args.y0,
+                                     feed=args.feed, power=args.power, repeat=args.repeat))
         elif a == "monitor":
             laser.monitor(interval=args.interval)
     except LaserError as exc:

@@ -73,6 +73,8 @@ class LaserGUI:
         self.preview_photo = None    # Referenz halten (sonst GC)
         self.gcode_lines = None      # zuletzt erzeugter G-Code
         self.gcode_path = None       # zuletzt gespeicherte Datei
+        self.last_wmm = None         # Maße der letzten Vorschau (für Rahmen abfahren)
+        self.last_hmm = None
 
         self._build_ui()
         self.root.after(100, self._drain_queue)
@@ -271,6 +273,16 @@ class LaserGUI:
         actf.pack(fill="x", pady=(8, 0))
         ttk.Button(actf, text="Vorschau aktualisieren",
                    command=self.on_preview).pack(fill="x", pady=2)
+
+        # Rahmen abfahren (Positionierhilfe): nutzt die Maße der letzten Vorschau.
+        framef = ttk.Frame(actf)
+        framef.pack(fill="x", pady=2)
+        ttk.Button(framef, text="Rahmen abfahren",
+                   command=self.on_frame).pack(side="left", fill="x", expand=True)
+        ttk.Label(framef, text="S:").pack(side="left", padx=(6, 2))
+        self.frame_power_var = tk.StringVar(value="0")
+        ttk.Entry(framef, textvariable=self.frame_power_var, width=6).pack(side="left")
+
         ttk.Button(actf, text="G-Code erzeugen & speichern…",
                    command=self.on_generate_save).pack(fill="x", pady=2)
         self._danger_button(actf, "An Laser senden (Upload + Start)",
@@ -394,6 +406,8 @@ class LaserGUI:
         threading.Thread(target=worker, daemon=True).start()
 
     def _show_preview(self, prev, wmm, hmm):
+        self.last_wmm = wmm
+        self.last_hmm = hmm
         self.preview_photo = ImageTk.PhotoImage(prev)
         self.canvas.delete("all")
         cw = self.canvas.winfo_width() or 520
@@ -486,6 +500,39 @@ class LaserGUI:
             threading.Thread(target=upload_worker, daemon=True).start()
 
         self._generate_gcode_async(after)
+
+    def on_frame(self):
+        """Fährt den Bounding-Box-Rahmen der zuletzt angezeigten Vorschau ab."""
+        if self.laser is None:
+            messagebox.showwarning("Nicht verbunden", "Bitte zuerst verbinden.")
+            return
+        if self.last_wmm is None or self.last_hmm is None:
+            messagebox.showinfo("Keine Maße",
+                                "Bitte zuerst die Vorschau aktualisieren.")
+            return
+        try:
+            power = max(0, int(float(self.frame_power_var.get())))
+        except (ValueError, AttributeError):
+            power = 0
+        try:
+            feed = float(self.travel_var.get())
+        except (ValueError, AttributeError):
+            feed = 6000.0
+
+        wmm, hmm = self.last_wmm, self.last_hmm
+        warn = ("\n\nACHTUNG: Laser läuft bei S%d konstant mit – nur einen kleinen,\n"
+                "sichtbaren (nicht brennenden) Wert verwenden!" % power) if power > 0 else \
+               "\n\nLaser bleibt AUS (nur Bewegung)."
+        if not messagebox.askyesno(
+                "Rahmen abfahren",
+                "Rechteck %.1f × %.1f mm ab aktueller Position abfahren?%s"
+                % (wmm, hmm, warn)):
+            return
+
+        self.log("Rahmen abfahren: %.1f × %.1f mm, S%d, F%g" % (wmm, hmm, power, feed))
+        self.run_async(
+            lambda: self.laser.frame_bounds(wmm, hmm, feed=feed, power=power),
+            "frame")
 
     # ------------------------------------------------------------------ #
     # Hilfsfunktionen

@@ -19,6 +19,8 @@ implementation of the open HTTP protocol.
   - **Raster / photo engraving:** grayscale → variable laser power (with dithering)
   - **Vector / outline cutting:** trace/cut contours (marching squares)
   - **Live preview** of the engraving including engraving-area dimensions
+  - **Frame trace:** drive the bounding box of the engraving area to check
+    placement before starting (laser off, or low constant power for a visible dot)
 - WiFi connection, live status and position display
 - Jog control (X/Y/Z), homing, unlock, pause/resume, soft reset, laser off
 - Upload and start G-code files
@@ -77,6 +79,7 @@ Then send the generated file to the laser with `immafiring.py upload` + `run`.
 python3 immafiring.py status                 # state + position
 python3 immafiring.py home                   # homing cycle ($H)
 python3 immafiring.py jog --x 10 --feed 3000 # 10 mm in +X
+python3 immafiring.py frame --width 80 --height 60   # trace bounding box (laser off)
 python3 immafiring.py upload motiv.gcode     # upload file
 python3 immafiring.py run motiv.gcode        # start uploaded file
 python3 immafiring.py laseroff               # laser off immediately
